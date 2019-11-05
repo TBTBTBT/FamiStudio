@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Media;
@@ -138,7 +139,19 @@ namespace FamiStudio
         int scrollY = 0;
         int zoomLevel = 0;
         int selectedEffectIdx = -1; // -1 = volume
-
+        //--ノーツ選択システム
+        private List<int> selectedNotes = new List<int>();
+        //--
+        //--範囲選択可能に
+        private bool draggingEditArea = false;
+        private int dragStartX = 0;
+        private int dragStartY = 0;
+        private int dragLastX = 0;
+        private int dragLastY = 0;
+        //--
+        //--選択ノーツ操作システム
+        private bool draggingSelectedNote = false;
+        //--
         EditionMode editMode = EditionMode.None;
 
         // Pattern edit mode.
@@ -753,7 +766,11 @@ namespace FamiStudio
                                         var note = pattern.Notes[i];
                                         var instrument = lastNoteInstrument;
                                         var color = instrument == null ? ThemeBase.LightGreyFillColor1 : instrument.Color;
-                                        if (dimmed) color = Color.FromArgb((int)(color.A * 0.2f), color);
+                                        if (dimmed)
+                                        {
+                                            color = Color.FromArgb((int)(color.A * 0.2f), color);
+                                        }
+                                        
 
                                         if (lastNoteValue != Note.NoteInvalid && lastNoteTime != int.MinValue && note.IsValid)
                                         {
@@ -763,7 +780,13 @@ namespace FamiStudio
                                                 int y = virtualSizeY - lastNoteValue * noteSizeY - scrollY + (lastNoteReleased ? noteSizeY / 2 - releaseNoteSizeY / 2 : 0);
 
                                                 int sizeY = lastNoteReleased ? releaseNoteSizeY : noteSizeY;
-
+                                                if (!dimmed)
+                                                {
+                                                    if (selectedNotes.Contains(lastNoteTime))
+                                                    {
+                                                        color = Color.White;
+                                                    }
+                                                }
                                                 g.PushTranslation(x, y);
                                                 g.FillRectangle(0, 0, (i - lastNoteTime) * noteSizeX, sizeY, g.GetVerticalGradientBrush(color, sizeY, 0.8f));
                                                 g.DrawRectangle(0, 0, (i - lastNoteTime) * noteSizeX, sizeY, theme.BlackBrush);
@@ -781,7 +804,13 @@ namespace FamiStudio
                                                 int y = virtualSizeY - value * noteSizeY - scrollY;
 
                                                 var paths = note.IsStop ? (lastNoteReleased ? stopReleaseNoteGeometry :  stopNoteGeometry) : releaseNoteGeometry;
-
+                                                if (!dimmed)
+                                                {
+                                                    if (selectedNotes.Contains(i))
+                                                    {
+                                                        color = Color.White;
+                                                    }
+                                                }
                                                 g.AntiAliasing = true;
                                                 g.PushTranslation(x, y);
                                                 g.FillConvexPath(paths[zoomLevel - MinZoomLevel], g.GetVerticalGradientBrush(color, noteSizeY, 0.8f));
@@ -831,7 +860,13 @@ namespace FamiStudio
                                     var instrument = lastNoteInstrument;
                                     var color = instrument == null ? ThemeBase.LightGreyFillColor1 : instrument.Color;
                                     if (dimmed) color = Color.FromArgb((int)(color.A * 0.2f), color);
-
+                                    if (!dimmed)
+                                    {
+                                        if (selectedNotes.Contains(lastNoteTime))
+                                        {
+                                            color = Color.White;
+                                        }
+                                    }
                                     int sizeY = lastNoteReleased ? releaseNoteSizeY : noteSizeY;
 
                                     g.PushTranslation(x, y);
@@ -944,7 +979,13 @@ namespace FamiStudio
             g.PopClip();
             g.PopTransform();
         }
-
+        private void RenderDragArea(RenderGraphics g, RenderArea a)
+        {
+            if (draggingEditArea)
+            {
+                g.FillRectangle(dragStartX, 0, dragLastX, dragLastY, g.GetVerticalGradientBrush(Color.FromArgb(30,Color.Aqua),envelopeSizeY, 0.8f));
+            }
+        }
         protected override void OnRender(RenderGraphics g)
         {
             var a = new RenderArea();
@@ -961,6 +1002,7 @@ namespace FamiStudio
             RenderEffectPanel(g, a);
             RenderPiano(g, a);
             RenderNotes(g, a);
+            RenderDragArea(g,a);
         }
 
         void ResizeEnvelope(MouseEventArgs e)
@@ -1118,7 +1160,11 @@ namespace FamiStudio
             bool left   = e.Button.HasFlag(MouseButtons.Left);
             bool middle = e.Button.HasFlag(MouseButtons.Middle) || (e.Button.HasFlag(MouseButtons.Left) && ModifierKeys.HasFlag(Keys.Alt));
             bool right  = e.Button.HasFlag(MouseButtons.Right);
-
+            if (right)
+            {
+                selectedNotes.Clear();
+                ConditionalInvalidate();
+            }
             if (left && e.Y > headerAndEffectSizeY && e.X < whiteKeySizeX)
             {
                 playingPiano = true;
@@ -1200,20 +1246,41 @@ namespace FamiStudio
             }
             else if (editMode == EditionMode.Channel && GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue))
             {
+                //配置
                 var changed = false;
                 var pattern = Song.Channels[editChannel].PatternInstances[patternIdx];
 
                 if (pattern == null)
                     return;
-
+                
                 if (left)
                 {
+
                     bool ctrl  = ModifierKeys.HasFlag(Keys.Control);
                     bool shift = ModifierKeys.HasFlag(Keys.Shift);
-                    if (ctrl || (shift && editChannel != Channel.DPCM))
+                    if (selectedNotes.Count > 0)
+                    {//選択範囲を移動
+                        dragStartX = e.X;
+                        dragStartY = e.Y;
+                        dragLastX = e.X;
+                        dragLastY = e.Y;
+                        App.UndoRedoManager.BeginTransaction(TransactionScope.Pattern, pattern.Id);
+                        draggingSelectedNote = true;
+
+                        
+                    }
+                    else if (shift && !ctrl)
+                    {//範囲選択
+                        dragStartX = e.X;
+                        dragStartY = e.Y;
+                        dragLastX = e.X;
+                        dragLastY = e.Y;
+                        draggingEditArea = true;
+                    }
+                    else if (ctrl )//|| (shift && editChannel != Channel.DPCM))
                     {
                         App.UndoRedoManager.BeginTransaction(TransactionScope.Pattern, pattern.Id);
-                        pattern.Notes[noteIdx].Value = (byte)(ctrl ? Note.NoteStop : Note.NoteRelease);
+                        pattern.Notes[noteIdx].Value = (byte)(!shift ? Note.NoteStop : Note.NoteRelease);
                         pattern.Notes[noteIdx].Instrument = null;
                         pattern.UpdateLastValidNotesAndVolume();
                         App.UndoRedoManager.EndTransaction();
@@ -1383,7 +1450,48 @@ namespace FamiStudio
             {
                 DrawEnvelope(e);
             }
+            if (draggingEditArea)
+            {
+                dragLastX = e.X;
+                dragLastY = e.Y;
+                ConditionalInvalidate();
+            }
 
+            if (draggingSelectedNote)
+            {
+                var before = (byte)(numNotes - Math.Min((dragLastY + scrollY - headerAndEffectSizeY) / noteSizeY, numNotes));
+                var now = (byte)(numNotes - Math.Min((e.Y + scrollY - headerAndEffectSizeY) / noteSizeY, numNotes));
+                byte delta = (byte)(now - before);
+                dragLastX = e.X;
+                dragLastY = e.Y;
+                GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue);
+                var pattern = Song.Channels[editChannel].PatternInstances[patternIdx];
+                for (int i = 0; i < selectedNotes.Count; i++)
+                {
+                    if (pattern.Notes[selectedNotes[i]].IsValid)
+                    {
+                        if (pattern.Notes[selectedNotes[i]].IsStop)
+                        {
+
+                        }
+                        else if(pattern.Notes[selectedNotes[i]].IsRelease)
+                        {
+                            
+                        }
+                        else
+                        {
+                            pattern.Notes[selectedNotes[i]].Value = (byte)(pattern.Notes[selectedNotes[i]].Value + delta);
+
+                            //pattern.Notes[noteIdx].Instrument = pattern.Notes[noteIdx].Instrument;
+                            pattern.UpdateLastValidNotesAndVolume();
+                        }
+                        
+                    }
+
+
+                }
+                ConditionalInvalidate();
+            }
             string tooltip = "";
             if (editMode == EditionMode.Channel)
             {
@@ -1455,6 +1563,46 @@ namespace FamiStudio
                 App.UndoRedoManager.EndTransaction();
                 changingEffectValue = false;
                 Capture = false;
+            }
+            if (draggingEditArea)
+            {
+                if (editMode == EditionMode.Channel && editChannel != Channel.DPCM)
+                {
+                    selectedNotes.Clear();
+                    GetNoteForCoord(dragStartX, 0, out int _0, out int startIdx, out byte _1);
+                    GetNoteForCoord(dragLastX, 0, out int _2, out int endIdx, out byte _3);
+                    for (int i = startIdx; i < endIdx; i++)
+                    {
+                        selectedNotes.Add(i + 1);
+                    }
+                }
+                draggingEditArea = false;
+                ConditionalInvalidate();
+            }
+
+            if (draggingSelectedNote)
+            {
+                var before = (byte)(numNotes - Math.Min((dragLastY + scrollY - headerAndEffectSizeY) / noteSizeY, numNotes));
+                var now = (byte)(numNotes - Math.Min((e.Y + scrollY - headerAndEffectSizeY) / noteSizeY, numNotes));
+                byte delta = (byte)(now - before);
+                dragLastX = e.X;
+                dragLastY = e.Y;
+                GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue);
+                var pattern = Song.Channels[editChannel].PatternInstances[patternIdx];
+                
+                for (int i = 0; i < selectedNotes.Count; i++)
+                {
+                    if (pattern.Notes[selectedNotes[i]].IsValid)
+                    {
+                        pattern.Notes[selectedNotes[i]].Value = (byte)(pattern.Notes[selectedNotes[i]].Value + delta);
+                        //pattern.Notes[noteIdx].Instrument = pattern.Notes[noteIdx].Instrument;
+                        pattern.UpdateLastValidNotesAndVolume();
+                    }
+
+                }
+                App.UndoRedoManager.EndTransaction();
+                ConditionalInvalidate();
+                draggingSelectedNote = false;
             }
         }
 
