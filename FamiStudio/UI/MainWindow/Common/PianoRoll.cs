@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -140,7 +141,20 @@ namespace FamiStudio
         int zoomLevel = 0;
         int selectedEffectIdx = -1; // -1 = volume
         //--ノーツ選択システム
-        private List<int> selectedNotes = new List<int>();
+        private class NotePatternSet
+        {
+            public int PatternIdx;
+            public int notesIdx;
+            public static bool operator == (NotePatternSet a, NotePatternSet b)
+            {
+                return a.PatternIdx == b.PatternIdx && a.notesIdx == b.notesIdx; 
+            }
+            public static bool operator != (NotePatternSet a, NotePatternSet b)
+            {
+                return !(a == b);
+            }
+        }
+        private List<NotePatternSet> selectedNotes = new List<NotePatternSet> ();
         //--
         //--範囲選択可能に
         private bool draggingEditArea = false;
@@ -782,7 +796,7 @@ namespace FamiStudio
                                                 int sizeY = lastNoteReleased ? releaseNoteSizeY : noteSizeY;
                                                 if (!dimmed)
                                                 {
-                                                    if (selectedNotes.Contains(lastNoteTime))
+                                                    if (selectedNotes.Any(element => element.notesIdx == lastNoteTime && element.PatternIdx == p))
                                                     {
                                                         color = Color.White;
                                                     }
@@ -806,7 +820,7 @@ namespace FamiStudio
                                                 var paths = note.IsStop ? (lastNoteReleased ? stopReleaseNoteGeometry :  stopNoteGeometry) : releaseNoteGeometry;
                                                 if (!dimmed)
                                                 {
-                                                    if (selectedNotes.Contains(i))
+                                                    if (selectedNotes.Any(element => element.notesIdx == lastNoteTime && element.PatternIdx == p ))
                                                     {
                                                         color = Color.White;
                                                     }
@@ -862,9 +876,9 @@ namespace FamiStudio
                                     if (dimmed) color = Color.FromArgb((int)(color.A * 0.2f), color);
                                     if (!dimmed)
                                     {
-                                        if (selectedNotes.Contains(lastNoteTime))
+                                        if (selectedNotes.Any(element => element.notesIdx == lastNoteTime && element.PatternIdx == a.maxVisiblePattern - 1))
                                         {
-                                            color = Color.White;
+                                           
                                         }
                                     }
                                     int sizeY = lastNoteReleased ? releaseNoteSizeY : noteSizeY;
@@ -983,7 +997,7 @@ namespace FamiStudio
         {
             if (draggingEditArea)
             {
-                g.FillRectangle(dragStartX, 0, dragLastX, dragLastY, g.GetVerticalGradientBrush(Color.FromArgb(30,Color.Aqua),envelopeSizeY, 0.8f));
+                g.FillRectangle(dragStartX, 0, dragLastX, 1000, g.GetVerticalGradientBrush(Color.FromArgb(30,Color.Aqua),envelopeSizeY, 0.8f));
             }
         }
         protected override void OnRender(RenderGraphics g)
@@ -1258,7 +1272,16 @@ namespace FamiStudio
 
                     bool ctrl  = ModifierKeys.HasFlag(Keys.Control);
                     bool shift = ModifierKeys.HasFlag(Keys.Shift);
-                    if (selectedNotes.Count > 0)
+                    if (shift && !ctrl)
+                    {//範囲選択
+                        selectedNotes.Clear();
+                        dragStartX = e.X;
+                        dragStartY = e.Y;
+                        dragLastX = e.X;
+                        dragLastY = e.Y;
+                        draggingEditArea = true;
+                    }
+                    else if (selectedNotes.Count > 0)
                     {//選択範囲を移動
                         dragStartX = e.X;
                         dragStartY = e.Y;
@@ -1269,14 +1292,7 @@ namespace FamiStudio
 
                         
                     }
-                    else if (shift && !ctrl)
-                    {//範囲選択
-                        dragStartX = e.X;
-                        dragStartY = e.Y;
-                        dragLastX = e.X;
-                        dragLastY = e.Y;
-                        draggingEditArea = true;
-                    }
+                    
                     else if (ctrl )//|| (shift && editChannel != Channel.DPCM))
                     {
                         App.UndoRedoManager.BeginTransaction(TransactionScope.Pattern, pattern.Id);
@@ -1464,26 +1480,27 @@ namespace FamiStudio
                 byte delta = (byte)(now - before);
                 dragLastX = e.X;
                 dragLastY = e.Y;
-                GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue);
-                var pattern = Song.Channels[editChannel].PatternInstances[patternIdx];
+                //GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue);
+                var pattern = Song.Channels[editChannel].PatternInstances;
                 for (int i = 0; i < selectedNotes.Count; i++)
                 {
-                    if (pattern.Notes[selectedNotes[i]].IsValid)
+                    var note = pattern[selectedNotes[i].PatternIdx].Notes[selectedNotes[i].notesIdx];
+                    if (note.IsValid)
                     {
-                        if (pattern.Notes[selectedNotes[i]].IsStop)
+                        if (note.IsStop)
                         {
 
                         }
-                        else if(pattern.Notes[selectedNotes[i]].IsRelease)
+                        else if(note.IsRelease)
                         {
                             
                         }
                         else
                         {
-                            pattern.Notes[selectedNotes[i]].Value = (byte)(pattern.Notes[selectedNotes[i]].Value + delta);
+                            pattern[selectedNotes[i].PatternIdx].Notes[selectedNotes[i].notesIdx].Value = (byte)(note.Value + delta);
 
                             //pattern.Notes[noteIdx].Instrument = pattern.Notes[noteIdx].Instrument;
-                            pattern.UpdateLastValidNotesAndVolume();
+                            pattern[selectedNotes[i].PatternIdx].UpdateLastValidNotesAndVolume();
                         }
                         
                     }
@@ -1566,15 +1583,47 @@ namespace FamiStudio
             }
             if (draggingEditArea)
             {
+                // select rect area
                 if (editMode == EditionMode.Channel && editChannel != Channel.DPCM)
                 {
                     selectedNotes.Clear();
-                    GetNoteForCoord(dragStartX, 0, out int _0, out int startIdx, out byte _1);
-                    GetNoteForCoord(dragLastX, 0, out int _2, out int endIdx, out byte _3);
-                    for (int i = startIdx; i < endIdx; i++)
+                    var start = Math.Min(dragStartX, dragLastX);
+                    var end = Math.Max(dragStartX, dragLastX);
+                    GetNoteForCoord(start, 0, out int startPatternIdx, out int startIdx, out byte _1);
+                    GetNoteForCoord(end, 0, out int endPatternIdx, out int endIdx, out byte _3);
+                    var pattern = Song.Channels[editChannel].PatternInstances;
+                    //add just before startidx note
+                    for (int i = startIdx; i >= 0; i--)
                     {
-                        selectedNotes.Add(i + 1);
+                        if (pattern[startPatternIdx].Notes.Length > i)
+                        {
+                            var note = pattern[startPatternIdx].Notes[i];
+                            if (note.IsValid)
+                            {
+                                var set = new NotePatternSet() { PatternIdx = startPatternIdx, notesIdx = i };
+                                if (selectedNotes.Any(notes => notes == set)) continue;
+                                selectedNotes.Add(set);
+                                break;
+                            }
+                        }
                     }
+                    //add before endidx note
+                    for (int i = Math.Max(startIdx - 1,0); i < endIdx; i++)
+                    {
+                        
+                        if (pattern[startPatternIdx].Notes.Length > i)
+                        {
+                            var note = pattern[startPatternIdx].Notes[i];
+                            if (note.IsValid)
+                            {
+                                var set = new NotePatternSet() { PatternIdx = startPatternIdx, notesIdx = i };
+                                if (selectedNotes.Any(notes => notes == set)) continue;
+                                selectedNotes.Add(set);
+                            }
+                        }
+                    }
+                   
+
                 }
                 draggingEditArea = false;
                 ConditionalInvalidate();
@@ -1588,15 +1637,16 @@ namespace FamiStudio
                 dragLastX = e.X;
                 dragLastY = e.Y;
                 GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue);
-                var pattern = Song.Channels[editChannel].PatternInstances[patternIdx];
+                var pattern = Song.Channels[editChannel].PatternInstances;
                 
                 for (int i = 0; i < selectedNotes.Count; i++)
                 {
-                    if (pattern.Notes[selectedNotes[i]].IsValid)
+                    var note = pattern[selectedNotes[i].PatternIdx].Notes[selectedNotes[i].notesIdx];
+                    if (note.IsValid)
                     {
-                        pattern.Notes[selectedNotes[i]].Value = (byte)(pattern.Notes[selectedNotes[i]].Value + delta);
+                        pattern[selectedNotes[i].PatternIdx].Notes[selectedNotes[i].notesIdx].Value = (byte)(note.Value + delta);
                         //pattern.Notes[noteIdx].Instrument = pattern.Notes[noteIdx].Instrument;
-                        pattern.UpdateLastValidNotesAndVolume();
+                        pattern[selectedNotes[i].PatternIdx].UpdateLastValidNotesAndVolume();
                     }
 
                 }
