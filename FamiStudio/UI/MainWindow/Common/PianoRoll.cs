@@ -57,12 +57,13 @@ namespace FamiStudio
         const int DefaultDPCMTextPosX           = 2;
         const int DefaultDPCMTextPosY           = 0;
         const int DefaultOctaveNameOffsetY      = 11;
-
+        const int DefaultFooterSize             = 15;
         int numNotes;
         int numOctaves;
         int baseOctave;
         int headerSizeY;
         int headerAndEffectSizeY;
+        int pianoSizeY;
         int effectPanelSizeY;
         int effectButtonSizeY;
         int noteSizeX;       
@@ -148,7 +149,7 @@ namespace FamiStudio
         // Envelope edit mode.
         Instrument editInstrument = null;
         int editEnvelope;
-
+        private int minNoteLength = 1;
         public delegate void PatternChange(Pattern pattern);
         public event PatternChange PatternChanged;
         public delegate void EnvelopeResize();
@@ -194,6 +195,7 @@ namespace FamiStudio
             patternSizeX           = noteSizeX * (Song == null ? 256 : Song.PatternLength);
             barSizeX               = noteSizeX * (Song == null ? 16  : Song.BarLength);
             headerAndEffectSizeY   = headerSizeY + (showEffectsPanel ? effectPanelSizeY : 0);
+            pianoSizeY             =  Height - DefaultFooterSize;
         }
 
         public Instrument CurrentInstrument
@@ -520,8 +522,8 @@ namespace FamiStudio
         private void RenderPiano(RenderGraphics g, RenderArea a)
         {
             g.PushTranslation(0, headerAndEffectSizeY);
-            g.PushClip(0, 0, whiteKeySizeX, Height);
-            g.FillRectangle(0, 0, whiteKeySizeX, Height, whiteKeyBrush);
+            g.PushClip(0, 0, whiteKeySizeX, pianoSizeY);
+            g.FillRectangle(0, 0, whiteKeySizeX, pianoSizeY, whiteKeyBrush);
 
             int playOctave = -1;
             int playNote = -1;
@@ -565,8 +567,21 @@ namespace FamiStudio
                 g.DrawText("C" + (i + baseOctave), ThemeBase.FontSmall, 1, octaveBaseY - octaveNameOffsetY, theme.BlackBrush);
             }
 
-            g.DrawLine(whiteKeySizeX - 1, 0, whiteKeySizeX - 1, Height, theme.DarkGreyLineBrush1);
+            g.DrawLine(whiteKeySizeX - 1, 0, whiteKeySizeX - 1, pianoSizeY, theme.DarkGreyLineBrush1);
+            g.PopClip();
+            g.PopTransform();
+        }
 
+        private void RenderNoteSize(RenderGraphics g)
+        {
+            g.PushTranslation(0, pianoSizeY);
+            g.PushClip(0, 0, whiteKeySizeX, Height);
+            g.FillRectangle(0, 0, whiteKeySizeX, DefaultFooterSize, whiteKeyBrush);
+            g.DrawLine(0, 0, whiteKeySizeX, 0, theme.DarkGreyLineBrush1);
+            g.DrawLine(whiteKeySizeX - 1, 0, whiteKeySizeX - 1, DefaultFooterSize, theme.DarkGreyLineBrush1);
+            g.DrawLine(whiteKeySizeX - 20, 0, whiteKeySizeX - 20, DefaultFooterSize, theme.DarkGreyLineBrush1);
+            g.DrawText("Min Note", ThemeBase.FontSmallBold, 0, 2, theme.BlackBrush);
+            g.DrawText($"{minNoteLength}", ThemeBase.FontSmallBold, whiteKeySizeX - 17, 2, theme.BlackBrush);
             g.PopClip();
             g.PopTransform();
         }
@@ -960,6 +975,7 @@ namespace FamiStudio
             RenderEffectList(g);
             RenderEffectPanel(g, a);
             RenderPiano(g, a);
+            RenderNoteSize(g);
             RenderNotes(g, a);
         }
 
@@ -1076,6 +1092,11 @@ namespace FamiStudio
             base.OnMouseDoubleClick(e);
 
             bool left = e.Button.HasFlag(MouseButtons.Left);
+            if (left && CheckMouseDownOnMinNoteLength(e.X, e.Y))
+            {
+                //very low position 
+                ShowDialogChangeMinNoteLength(e.X, e.Y - 80, 160);
+            }
 
             if (editMode == EditionMode.DPCM && left && GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue))
             {
@@ -1119,7 +1140,11 @@ namespace FamiStudio
             bool middle = e.Button.HasFlag(MouseButtons.Middle) || (e.Button.HasFlag(MouseButtons.Left) && ModifierKeys.HasFlag(Keys.Alt));
             bool right  = e.Button.HasFlag(MouseButtons.Right);
 
-            if (left && e.Y > headerAndEffectSizeY && e.X < whiteKeySizeX)
+            if (left && CheckMouseDownOnMinNoteLength(e.X, e.Y))
+            {//it is double click area
+
+            }
+            else if (left && e.Y > headerAndEffectSizeY && e.X < whiteKeySizeX)
             {
                 playingPiano = true;
                 PlayPiano(e.X, e.Y);
@@ -1200,18 +1225,24 @@ namespace FamiStudio
             }
             else if (editMode == EditionMode.Channel && GetNoteForCoord(e.X, e.Y, out int patternIdx, out int noteIdx, out byte noteValue))
             {
+                //place notes transaction
                 var changed = false;
                 var pattern = Song.Channels[editChannel].PatternInstances[patternIdx];
 
                 if (pattern == null)
                     return;
 
+                if (minNoteLength > 1)
+                {
+                    noteIdx = Convert.ToInt32(Math.Floor((double)noteIdx / minNoteLength)) * minNoteLength;
+                }
+                
                 if (left)
                 {
                     bool ctrl  = ModifierKeys.HasFlag(Keys.Control);
                     bool shift = ModifierKeys.HasFlag(Keys.Shift);
                     if (ctrl || (shift && editChannel != Channel.DPCM))
-                    {
+                    {//stop note or release note
                         App.UndoRedoManager.BeginTransaction(TransactionScope.Pattern, pattern.Id);
                         pattern.Notes[noteIdx].Value = (byte)(ctrl ? Note.NoteStop : Note.NoteRelease);
                         pattern.Notes[noteIdx].Instrument = null;
@@ -1534,6 +1565,24 @@ namespace FamiStudio
                 ClampScroll();
                 ConditionalInvalidate();
             }
+        }
+        private bool CheckMouseDownOnMinNoteLength(int mouseX,int mouseY)
+        {
+
+            return mouseX < whiteKeySizeX && mouseY > pianoSizeY;
+
+        }
+
+        private void ShowDialogChangeMinNoteLength(int dlgX,int dlgY,int size)
+        {
+            var dlg = new PropertyDialog(PointToScreen(new Point(dlgX, dlgY)), size);
+            dlg.Properties.AddIntegerRange("Min Length :", minNoteLength, 0, 128);
+            dlg.Properties.Build();
+            if (dlg.ShowDialog() == DialogResult.OK)
+            {
+                minNoteLength = dlg.Properties.GetPropertyValue<int>(0);
+            }
+            ConditionalInvalidate();
         }
     }
 }
