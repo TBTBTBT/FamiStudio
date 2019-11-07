@@ -1592,36 +1592,47 @@ namespace FamiStudio
                     GetNoteForCoord(start, 0, out int startPatternIdx, out int startIdx, out byte _1);
                     GetNoteForCoord(end, 0, out int endPatternIdx, out int endIdx, out byte _3);
                     var pattern = Song.Channels[editChannel].PatternInstances;
-                    //add just before startidx note
-                    for (int i = startIdx; i >= 0; i--)
+                    for (int p = startPatternIdx; p < endPatternIdx + 1; p++)
                     {
-                        if (pattern[startPatternIdx].Notes.Length > i)
+                        if (p == startPatternIdx)
                         {
-                            var note = pattern[startPatternIdx].Notes[i];
-                            if (note.IsValid)
+                            //add just before startidx note
+                            for (int i = startIdx; i >= 0; i--)
                             {
-                                var set = new NotePatternSet() { PatternIdx = startPatternIdx, notesIdx = i };
-                                if (selectedNotes.Any(notes => notes == set)) continue;
-                                selectedNotes.Add(set);
-                                break;
+                                if (pattern[startPatternIdx].Notes.Length > i)
+                                {
+                                    var note = pattern[startPatternIdx].Notes[i];
+                                    if (note.IsValid)
+                                    {
+                                        var set = new NotePatternSet() {PatternIdx = startPatternIdx, notesIdx = i};
+                                        if (selectedNotes.Any(notes => notes == set)) continue;
+                                        selectedNotes.Add(set);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        var startAddIdx = p == startPatternIdx ? Math.Max(startIdx - 1, 0) : 0;
+                        var endAddIdx = p == endPatternIdx ? endIdx : pattern[p].Notes.Length;
+
+                        //add before endidx note
+                        for (int i = startAddIdx; i < endAddIdx; i++)
+                        {
+
+                            if (pattern[p].Notes.Length > i)
+                            {
+                                var note = pattern[p].Notes[i];
+                                if (note.IsValid)
+                                {
+                                    var set = new NotePatternSet() { PatternIdx = p, notesIdx = i };
+                                    if (selectedNotes.Any(notes => notes == set)) continue;
+                                    selectedNotes.Add(set);
+                                }
                             }
                         }
                     }
-                    //add before endidx note
-                    for (int i = Math.Max(startIdx - 1,0); i < endIdx; i++)
-                    {
-                        
-                        if (pattern[startPatternIdx].Notes.Length > i)
-                        {
-                            var note = pattern[startPatternIdx].Notes[i];
-                            if (note.IsValid)
-                            {
-                                var set = new NotePatternSet() { PatternIdx = startPatternIdx, notesIdx = i };
-                                if (selectedNotes.Any(notes => notes == set)) continue;
-                                selectedNotes.Add(set);
-                            }
-                        }
-                    }
+                    
                    
 
                 }
@@ -1698,7 +1709,7 @@ namespace FamiStudio
             patternIdx = noteIdx / Song.PatternLength;
             noteIdx   %= Song.PatternLength;
             noteValue  = (byte)(numNotes - Math.Min((y + scrollY - headerAndEffectSizeY) / noteSizeY, numNotes));
-
+            if (patternIdx < 0) patternIdx = 0;
             return (x > whiteKeySizeX && y > headerAndEffectSizeY && patternIdx < Song.Length);
         }
 
