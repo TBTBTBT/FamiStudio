@@ -33,10 +33,18 @@ namespace FamiStudio
 
             SEQ_COUNT
         };
+        public static readonly Dictionary<Sequence_t, int> SequenceToEnvelope = new Dictionary<Sequence_t, int>()
+        {
+            {Sequence_t.SEQ_VOLUME ,Envelope.Volume},
+            {Sequence_t.SEQ_ARPEGGIO ,Envelope.Arpeggio},
+            {Sequence_t.SEQ_PITCH ,Envelope.Pitch},
+
+        };
         public static Instrument Load(int uniqueId, string filename)
         {
             var bytes = System.IO.File.ReadAllBytes(filename);
-            if (!CheckFormat(bytes))
+            var version = -1;
+            if (!CheckFormat(bytes,out version))
             {
                
                 return null;
@@ -51,7 +59,7 @@ namespace FamiStudio
                 case Inst_Type_t.INST_NONE:
                     break;
                 case Inst_Type_t.INST_2A03:
-                    return ConvertInstrument2A03(uniqueId, bytes);
+                    return new ConvertInstrument2A03().Convert(uniqueId, version, bytes, offsetIndex);//ConvertInstrument2A03(uniqueId, bytes);
                 case Inst_Type_t.INST_VRC6:
                     break;
                 case Inst_Type_t.INST_VRC7:
@@ -65,15 +73,17 @@ namespace FamiStudio
             }
             return null;
         }
-        private static bool CheckFormat( byte[] inputdata )
+        private static bool CheckFormat( byte[] inputdata ,out int iVersion)
         {
             //outdata = new string[0];
             //if(inputdata.Length != 1)
             //{//invalid format
-               
+
             //    return false;
             //}
             ////str length == 1
+            ///
+            iVersion = -1;
             var targetHeaderByte = Encoding.ASCII.GetBytes(INST_HEADER);
             var currentVersionByte = Encoding.ASCII.GetBytes(INST_VERSION);
             if (inputdata.Length < targetHeaderByte.Length + currentVersionByte.Length + 1)
@@ -107,7 +117,7 @@ namespace FamiStudio
             {//version not supported
                 return false;
             }
-
+            iVersion = (int)(fileVersion * 10);
             return true;
 
         }
@@ -123,35 +133,8 @@ namespace FamiStudio
             }
             return (Inst_Type_t)instTypeByte;
         }
-        private static string GetInstrumentName(byte[] inputdata)
-        {
-            var targetHeaderByte = Encoding.ASCII.GetBytes(INST_HEADER);
-            var currentVersionByte = Encoding.ASCII.GetBytes(INST_VERSION);
-            if (inputdata.Length < targetHeaderByte.Length + currentVersionByte.Length + 1 + 4)
-            {
-                return "";
-            }
-            var nameLengthByte = new byte[4];
-            Array.Copy(inputdata, targetHeaderByte.Length + currentVersionByte.Length + 1, nameLengthByte, 0, 4);
-            var nameLength = BitConverter.ToInt32(nameLengthByte, 0);
-            if (nameLength >= 256)
-            {
-                return "";
-            }
-            if (inputdata.Length < targetHeaderByte.Length + currentVersionByte.Length + 1 + 4 + nameLength)
-            {
-                return "";
-            }
-            var nameByte = new byte[nameLength];
-            Array.Copy(inputdata, targetHeaderByte.Length + currentVersionByte.Length + 1 + 4, nameByte, 0, nameLength);
-            return Encoding.ASCII.GetString(nameByte);
 
-        }
-        private static Instrument ConvertInstrument2A03(int uniqueId , byte[] inputdata)
-        {
-            var instrument = new Instrument(uniqueId, GetInstrumentName(inputdata));
-            return instrument;
-        }
+
         private static bool CompareByteArray(byte[] a1,byte[] a2)
         {
             if(a1.Length != a2.Length)
@@ -176,16 +159,16 @@ namespace FamiStudio
         protected byte[] data;
         protected int[] m_iSeqEnable = new int[(int)FamitrackerInstrumentFile.Sequence_t.SEQ_COUNT];
         protected int[] m_iSeqIndex = new int[(int)FamitrackerInstrumentFile.Sequence_t.SEQ_COUNT];
-        protected sbyte[,] m_cSamples = new char[FamitrackerInstrumentFile.OCTAVE_RANGE,12];   // Samples
-        protected sbyte[,] m_cSamplePitch = new char[FamitrackerInstrumentFile.OCTAVE_RANGE, 12];// Play pitch/loop
-        protected sbyte[,] m_cSampleLoopOffset = new char[FamitrackerInstrumentFile.OCTAVE_RANGE, 12];// Loop offset
-        protected sbyte[,] m_cSampleDelta = new char[FamitrackerInstrumentFile.OCTAVE_RANGE, 12];// Delta setting
+        protected sbyte[,] m_cSamples = new sbyte[FamitrackerInstrumentFile.OCTAVE_RANGE,12];   // Samples
+        protected sbyte[,] m_cSamplePitch = new sbyte[FamitrackerInstrumentFile.OCTAVE_RANGE, 12];// Play pitch/loop
+        protected sbyte[,] m_cSampleLoopOffset = new sbyte[FamitrackerInstrumentFile.OCTAVE_RANGE, 12];// Loop offset
+        protected sbyte[,] m_cSampleDelta = new sbyte[FamitrackerInstrumentFile.OCTAVE_RANGE, 12];// Delta setting
 
-        public Instrument Convert(int uniqueId, byte[] data, int idx)
+        public Instrument Convert(int uniqueId, int iVersion ,byte[] data, int idx)
         {
             this.idx = idx;
             this.data = data;
-            return Convert(uniqueId);
+            return Convert(uniqueId, iVersion);
         }
         protected abstract Instrument Convert(int uniqueId, int iVersion);
 
@@ -231,13 +214,22 @@ namespace FamiStudio
             }
             return true;
         }
-        protected int GetFreeSequence(int Type)
+        ////this is GetFreeSequence of FamiTracker
+        //protected int GetEnvelopeExist(int type)
+        //{
+        //    var seq = (FamitrackerInstrumentFile.Sequence_t)type;
+        //    if (FamitrackerInstrumentFile.SequenceToEnvelope.ContainsKey(seq))
+        //    {
+        //    }
+        //}
+        //this is GetSequence of FamiTracker
+        protected int GetEnvelopeIndex(int type)
         {
-            // Return a free sequence slot, or -1 otherwise
-            for (int i = 0; i < FamitrackerInstrumentFile.MAX_SEQUENCES; ++i)
+            var seq = (FamitrackerInstrumentFile.Sequence_t)type;
+            if (FamitrackerInstrumentFile.SequenceToEnvelope.ContainsKey(seq))
             {
-                if (GetSequenceItemCount(i, Type) == 0)
-                    return i;
+                var idx = FamitrackerInstrumentFile.SequenceToEnvelope[seq];
+                return idx;
             }
             return -1;
         }
@@ -285,7 +277,57 @@ namespace FamiStudio
                     var count = BitConverter.ToInt32(temp, 0);
                     if(count < 0 || FamitrackerInstrumentFile.MAX_SEQUENCE_ITEMS < count)
                         return null;
-                    
+                    var idx = GetEnvelopeIndex(i);
+                    if(idx != -1)
+                    {
+                        if(iVersion < 20)
+                        {
+                            //todo support old version
+                            return null;
+                            var length = new sbyte[count];
+                            var value = new sbyte[count];
+                            for (int j = 0; j < count; ++j)
+                            {
+                                ReadByte(byteSize, out temp);
+                                length[j] = System.Convert.ToSByte(temp[0]);
+                                ReadByte(byteSize, out temp);
+                                value[j] = System.Convert.ToSByte(temp[0]);
+                            }
+                        }
+                        else
+                        {
+                            //length
+                            instrument.Envelopes[idx].Length = count;
+                            //loop setting
+                            if (!ReadByte(intSize, out temp))
+                                return null;
+                            instrument.Envelopes[idx].Loop = BitConverter.ToInt32(temp, 0);
+                            if (iVersion > 20)
+                            {
+                                //release
+                                if (!ReadByte(intSize, out temp))
+                                    return null;
+                                instrument.Envelopes[idx].Release = BitConverter.ToInt32(temp, 0);
+                            }
+                            if (iVersion >= 23)
+                            {
+                                //arp_setting_t
+                                //maybe famistudio not supported ( always absolute )
+                                if (!ReadByte(intSize, out temp))
+                                    return null;
+
+                            }
+                            for (int j = 0; j < count; ++j)
+                            {
+                                if (!ReadByte(byteSize, out temp))
+                                    return null;
+                                instrument.Envelopes[idx].Values[j] = System.Convert.ToSByte(temp[0]);
+
+
+                            }
+                            
+                        }
+                    }
                 }
                 else
                 {
