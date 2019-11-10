@@ -214,6 +214,14 @@ namespace FamiStudio
             }
             return true;
         }
+        protected sbyte ToSByte(byte val)
+        {
+            if(val >= 128)
+            {
+                return (sbyte)(val - 256);
+            }
+            return (sbyte)val;
+        }
         ////this is GetFreeSequence of FamiTracker
         //protected int GetEnvelopeExist(int type)
         //{
@@ -321,7 +329,7 @@ namespace FamiStudio
                             {
                                 if (!ReadByte(byteSize, out temp))
                                     return null;
-                                instrument.Envelopes[idx].Values[j] = System.Convert.ToSByte(temp[0]);
+                                instrument.Envelopes[idx].Values[j] = ToSByte(temp[0]);
 
 
                             }
